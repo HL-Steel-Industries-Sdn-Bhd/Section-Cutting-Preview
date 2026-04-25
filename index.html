@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <title>动态分段条状可视化 | 段码分配器</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none; /* 避免移动端长按菜单，但无伤大雅 */
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: linear-gradient(145deg, #f0f4fa 0%, #d9e1ec 100%);
+            font-family: system-ui, 'Segoe UI', 'Helvetica Neue', 'Noto Sans', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        /* 手机竖屏卡片容器 */
+        .card {
+            max-width: 480px;
+            width: 100%;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.92);
+            backdrop-filter: blur(2px);
+            border-radius: 52px;
+            box-shadow: 0 25px 45px -12px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.05);
+            overflow: hidden;
+            padding: 24px 22px 36px;
+            transition: all 0.2s ease;
+        }
+
+        h1 {
+            font-size: 1.65rem;
+            font-weight: 600;
+            margin: 0 0 6px 0;
+            letter-spacing: -0.3px;
+            color: #1a2c3e;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        h1 small {
+            font-size: 0.75rem;
+            font-weight: 400;
+            background: #eef2f7;
+            padding: 4px 10px;
+            border-radius: 40px;
+            color: #2c5f8a;
+        }
+
+        .sub {
+            color: #4a627a;
+            font-size: 0.85rem;
+            margin-bottom: 28px;
+            border-left: 3px solid #3b82f6;
+            padding-left: 12px;
+            font-weight: 450;
+        }
+
+        /* 输入区域 */
+        .input-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 28px;
+            background: #f8fafc;
+            padding: 16px 14px;
+            border-radius: 36px;
+            box-shadow: inset 0 1px 2px #00000008, 0 2px 4px #ffffff80;
+        }
+
+        .field {
+            flex: 1;
+            min-width: 110px;
+        }
+
+        .field label {
+            display: block;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #3b6e9e;
+            margin-bottom: 6px;
+        }
+
+        .field input {
+            width: 100%;
+            padding: 12px 14px;
+            font-size: 1rem;
+            border: 1.5px solid #cfdfed;
+            border-radius: 28px;
+            background: white;
+            font-weight: 500;
+            transition: 0.2s;
+            outline: none;
+            color: #0a2a3b;
+        }
+
+        .field input:focus {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.2);
+        }
+
+        button {
+            background: #1f5e94;
+            border: none;
+            padding: 0 24px;
+            border-radius: 40px;
+            font-weight: 600;
+            font-size: 1rem;
+            color: white;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 5px 12px rgba(0, 0, 0, 0.1);
+            min-height: 50px;
+            margin-top: 22px;
+            width: 100%;
+            justify-content: center;
+        }
+
+        button:active {
+            transform: scale(0.97);
+            background: #0e4170;
+        }
+
+        /* 条状物可视化区域 */
+        .viz-section {
+            margin: 28px 0 20px;
+        }
+
+        .stats-badge {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            background: #eef3fc;
+            padding: 8px 16px;
+            border-radius: 60px;
+            color: #1f4e79;
+        }
+
+        .stats-badge span {
+            font-weight: 700;
+            color: #0c4e6e;
+        }
+
+        /* 条形容器 (父级进度条轨道) */
+        .bar-track {
+            background: #e2e8f0;
+            border-radius: 60px;
+            height: 64px;
+            width: 100%;
+            position: relative;
+            overflow: hidden;
+            box-shadow: inset 0 1px 4px rgba(0,0,0,0.1), 0 1px 1px white;
+            margin: 16px 0 12px;
+        }
+
+        /* 分段填充的实际条状 (flex 动态子元素) */
+        .bar-segments {
+            display: flex;
+            height: 100%;
+            width: 100%;
+            border-radius: 60px;
+            overflow: hidden;
+        }
+
+        /* 每一“段码”样式 */
+        .segment {
+            height: 100%;
+            background: linear-gradient(135deg, #3b82f6, #1e5bc0);
+            transition: all 0.25s ease;
+            box-shadow: inset 0 1px 2px rgba(255,255,255,0.3), 0 1px 1px rgba(0,0,0,0.05);
+            position: relative;
+        }
+
+        /* 余数部分特殊样式 (若有余数并且不为零) */
+        .segment-remainder {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            background: repeating-linear-gradient(45deg, #f5b042, #f5b042 6px, #f59e0b 6px, #f59e0b 12px);
+            box-shadow: inset 0 0 0 1px rgba(255,200,100,0.5);
+        }
+
+        /* 在极小宽度下给分段加极细分隔线 */
+        .segment:not(:last-child) {
+            border-right: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        /* 分段标签 (info) */
+        .segment-info {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 18px;
+            font-size: 0.75rem;
+            background: #ffffffc9;
+            border-radius: 32px;
+            padding: 12px 12px;
+            backdrop-filter: blur(2px);
+        }
+
+        .info-chip {
+            background: #eef2ff;
+            padding: 6px 14px;
+            border-radius: 40px;
+            display: inline-flex;
+            align-items: baseline;
+            gap: 6px;
+            font-weight: 500;
+            color: #1e293b;
+        }
+
+        .info-chip strong {
+            color: #2563eb;
+            font-size: 0.9rem;
+        }
+
+        .remainder-chip {
+            background: #fff1e0;
+        }
+
+        .remainder-chip strong {
+            color: #ea580c;
+        }
+
+        .detail-note {
+            background: #eef2fa;
+            border-radius: 28px;
+            padding: 14px 16px;
+            margin-top: 20px;
+            font-size: 0.85rem;
+            text-align: center;
+            color: #2c4e6e;
+            font-weight: 500;
+            border: 1px solid #cbdde9;
+        }
+
+        hr {
+            margin: 12px 0;
+            border: none;
+            height: 1px;
+            background: #cddfec;
+        }
+
+        @media (max-width: 450px) {
+            .card {
+                padding: 20px 18px 30px;
+            }
+            .bar-track {
+                height: 52px;
+            }
+            .stats-badge {
+                font-size: 0.75rem;
+            }
+            .info-chip {
+                padding: 4px 12px;
+                font-size: 0.7rem;
+            }
+        }
+
+        /* 无分段，显示占位提示 */
+        .empty-segment-message {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            font-size: 0.85rem;
+            color: #6b7c93;
+            background: #f1f5f9;
+            width: 100%;
+            border-radius: 60px;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <h1>
+        📊 动态段码分配器
+        <small>条状分段可视化</small>
+    </h1>
+    <div class="sub">根据「总容量」与「单段大小」自动分割条状物，余数精细展示</div>
+
+    <div class="input-group">
+        <div class="field">
+            <label>📦 总容量 (总量) </label>
+            <input type="number" id="totalCapacity" placeholder="例如: 6000" value="6000" step="1" min="0">
+        </div>
+        <div class="field">
+            <label>🔸 单段大小 (段长) </label>
+            <input type="number" id="segmentSize" placeholder="例如: 850" value="850" step="1" min="1">
+        </div>
+    </div>
+    <button id="updateBtn">
+        ✨ 更新分段 & 渲染条状
+    </button>
+
+    <div class="viz-section">
+        <div class="stats-badge">
+            <span>📏 总容量: <span id="displayTotal">6000</span></span>
+            <span>⚙️ 单段: <span id="displayUnit">850</span></span>
+            <span>🧩 完整段数: <span id="displayFullSegments">7</span></span>
+        </div>
+
+        <!-- 条状物容器 -->
+        <div class="bar-track">
+            <div class="bar-segments" id="barSegmentsContainer">
+                <!-- 动态生成的段码flex子项 -->
+                <div class="empty-segment-message">输入数值后点击更新</div>
+            </div>
+        </div>
+
+        <!-- 下方详细分配信息 + 余数展示 -->
+        <div class="segment-info" id="segmentInfoPanel">
+            <div class="info-chip">📌 暂无分段数据</div>
+        </div>
+        <div class="detail-note" id="detailNote">
+            💡 示例: 6000 总量, 每段850 → 7整段 + 余数50
+        </div>
+    </div>
+</div>
+
+<script>
+    (function() {
+        // DOM 元素
+        const totalInput = document.getElementById('totalCapacity');
+        const segmentInput = document.getElementById('segmentSize');
+        const updateBtn = document.getElementById('updateBtn');
+        const barContainer = document.getElementById('barSegmentsContainer');
+        const displayTotalSpan = document.getElementById('displayTotal');
+        const displayUnitSpan = document.getElementById('displayUnit');
+        const displayFullSegmentsSpan = document.getElementById('displayFullSegments');
+        const segmentInfoPanel = document.getElementById('segmentInfoPanel');
+        const detailNoteDiv = document.getElementById('detailNote');
+
+        // 辅助函数: 安全数值解析
+        function parsePositiveInt(value, defaultValue = 0) {
+            let num = parseInt(value, 10);
+            if (isNaN(num)) return defaultValue;
+            // 负数处理为0或极小保护，容量负数强制变为0
+            return Math.max(0, num);
+        }
+
+        // 核心渲染: 根据总容量total, 单段大小unit, 计算段数/余数/比例并生成条状分段
+        function renderSegments(total, unit) {
+            // 边界处理: 总容量 = 0 或单段 = 0 的特殊情况
+            if (total <= 0) {
+                // 空条状态
+                barContainer.innerHTML = `<div class="empty-segment-message">⚠️ 总容量为0，无法分段</div>`;
+                segmentInfoPanel.innerHTML = `<div class="info-chip">📭 总容量为零，未生成段码</div>`;
+                detailNoteDiv.innerHTML = `💡 请将「总容量」设为大于0的值以查看条状分段。`;
+                displayTotalSpan.innerText = total;
+                displayUnitSpan.innerText = unit;
+                displayFullSegmentsSpan.innerText = '0';
+                return;
+            }
+            
+            if (unit <= 0) {
+                barContainer.innerHTML = `<div class="empty-segment-message">❌ 单段大小必须 ≥ 1</div>`;
+                segmentInfoPanel.innerHTML = `<div class="info-chip">⚠️ 单段大小无效 (需大于0)</div>`;
+                detailNoteDiv.innerHTML = `📐 每段尺寸必须至少为1，才能正确展示分段。`;
+                displayTotalSpan.innerText = total;
+                displayUnitSpan.innerText = unit;
+                displayFullSegmentsSpan.innerText = '0';
+                return;
+            }
+
+            // 计算完整段数 & 余数
+            let fullCount = Math.floor(total / unit);
+            let remainder = total % unit;
+
+            // 极端情况：如果总容量<单段大小，满段数为0，余数=total本身
+            if (total < unit) {
+                fullCount = 0;
+                remainder = total;
+            }
+
+            // 储存各分段宽度比例 (基于总容量total)
+            // 构建展示数据: 每个完整段占用 ratio = unit/total, 余数占用 ratio = remainder/total
+            // 注意：如果total为0上面已处理，所以这里total>0
+            const segments = [];
+            for (let i = 0; i < fullCount; i++) {
+                segments.push({
+                    type: 'full',
+                    value: unit,
+                    widthPercent: (unit / total) * 100
+                });
+            }
+            // 有余数并且余数>0时才添加余数段
+            if (remainder > 0) {
+                segments.push({
+                    type: 'remainder',
+                    value: remainder,
+                    widthPercent: (remainder / total) * 100
+                });
+            }
+
+            // 如果没有任何段（全满+余数都为0但total>0的情况几乎不存在，但以防unit=total且remainder=0时也应有full段）
+            // 不过上面已经推了full段，当total>0且unit>0时至少会推一个fullCount>=0，但如total=500 unit=1000, fullCount=0 remainder=500 会推余数段，good.
+            // 处理特别场景: fullCount===0 && remainder===0 不会发生 因为total>0, 但假设total=0, 已前置.
+            
+            // 更新头部统计数据
+            displayTotalSpan.innerText = total;
+            displayUnitSpan.innerText = unit;
+            displayFullSegmentsSpan.innerText = fullCount;
+
+            // 渲染条状物: 使用flex布局，宽度基于百分比
+            if (segments.length === 0) {
+                // 后备: 没有分段但total>0不应该发生，但如果发生显示占位
+                barContainer.innerHTML = `<div class="empty-segment-message">⚡ 无有效分段信息</div>`;
+            } else {
+                // 清除容器，构建flex子项
+                barContainer.innerHTML = '';
+                for (let idx = 0; idx < segments.length; idx++) {
+                    const seg = segments[idx];
+                    const segDiv = document.createElement('div');
+                    segDiv.className = 'segment';
+                    if (seg.type === 'remainder') {
+                        segDiv.classList.add('segment-remainder');
+                    }
+                    // 宽度样式百分比（精确到小数点后4位保证平滑显示）
+                    const widthVal = seg.widthPercent;
+                    segDiv.style.width = `${widthVal}%`;
+                    segDiv.style.flex = `0 0 ${widthVal}%`;  // 确保不被压缩
+                    // 可选: 增加极小tooltip或aria标签
+                    segDiv.setAttribute('data-value', seg.value);
+                    segDiv.setAttribute('data-type', seg.type);
+                    
+                    // 添加视觉索引/悬浮文本(移动端长按会显示)
+                    const titleText = seg.type === 'full' ? `整段: ${seg.value}` : `余数段: ${seg.value}`;
+                    segDiv.title = titleText;
+                    
+                    barContainer.appendChild(segDiv);
+                }
+            }
+
+            // 下面构建详细的信息面板（段码分配细节）
+            buildInfoPanel(fullCount, unit, remainder, total);
+            
+            // 设置detailNote附加描述
+            if (remainder > 0) {
+                detailNoteDiv.innerHTML = `📌 分配详情: ${total} = ${fullCount}段 × ${unit} + 余数 ${remainder} 。条状中橙色斜纹区域代表剩余部分。`;
+            } else {
+                if (fullCount > 0) {
+                    detailNoteDiv.innerHTML = `✨ 完美分割！ ${total} 正好被 ${unit} 整除，共 ${fullCount} 段，无余数。`;
+                } else {
+                    detailNoteDiv.innerHTML = `📐 当前总容量 (${total}) 小于单段大小 (${unit})，因此全部作为余数段展示（橙色区域）。`;
+                }
+            }
+        }
+
+        // 构建底部分段文字信息卡片
+        function buildInfoPanel(fullCount, unit, remainder, total) {
+            // 清除原有，生成丰富的分段摘要
+            segmentInfoPanel.innerHTML = '';
+            
+            // 创建一个片段容器，展示段码明细
+            const wrapper = document.createElement('div');
+            wrapper.style.display = 'flex';
+            wrapper.style.flexWrap = 'wrap';
+            wrapper.style.gap = '10px';
+            wrapper.style.justifyContent = 'center';
+            wrapper.style.width = '100%';
+            
+            // 完整段统计块
+            if (fullCount > 0) {
+                const fullChip = document.createElement('div');
+                fullChip.className = 'info-chip';
+                fullChip.innerHTML = `✅ 完整段数: <strong>${fullCount}</strong> &nbsp;|&nbsp; 每段 <strong>${unit}</strong>`;
+                wrapper.appendChild(fullChip);
+            } else {
+                // 显示无完整段但有总量时，给出特别提示
+                if (total > 0 && unit > 0) {
+                    const noFullChip = document.createElement('div');
+                    noFullChip.className = 'info-chip';
+                    noFullChip.innerHTML = `🔹 完整段数: <strong>0</strong> (总容量小于单段)`;
+                    wrapper.appendChild(noFullChip);
+                } else {
+                    const infoChip = document.createElement('div');
+                    infoChip.className = 'info-chip';
+                    infoChip.innerHTML = `📊 暂无完整段`;
+                    wrapper.appendChild(infoChip);
+                }
+            }
+            
+            // 余数块 (余数大于0时展示)
+            if (remainder > 0) {
+                const remainderChip = document.createElement('div');
+                remainderChip.className = 'info-chip remainder-chip';
+                remainderChip.innerHTML = `🔶 余数段: <strong>${remainder}</strong> (橙色斜纹区域)`;
+                wrapper.appendChild(remainderChip);
+            } else if (fullCount > 0 && remainder === 0 && total > 0) {
+                const exactChip = document.createElement('div');
+                exactChip.className = 'info-chip';
+                exactChip.innerHTML = `🎯 整除无余数，条状完全均分 ${fullCount} 段`;
+                wrapper.appendChild(exactChip);
+            }
+            
+            // 如果总容量 >0 且 没有任何段码信息? (比如 unit 非法已在别处处理)
+            if (fullCount === 0 && remainder === 0 && total > 0) {
+                // 极特殊场景，补一个提示（unit可能为0或者其他）
+                const fallbackChip = document.createElement('div');
+                fallbackChip.className = 'info-chip';
+                fallbackChip.innerHTML = `⚠️ 无法分段，请检查单段大小是否大于0`;
+                wrapper.appendChild(fallbackChip);
+            }
+            
+            // 为了更清楚展示每一段的总和: 展示总和的验算
+            const totalCheck = fullCount * unit + remainder;
+            if (total > 0) {
+                const verifyChip = document.createElement('div');
+                verifyChip.className = 'info-chip';
+                verifyChip.style.background = '#e6f0fe';
+                verifyChip.innerHTML = `🧾 总和校验: ${totalCheck} = ${total}`;
+                wrapper.appendChild(verifyChip);
+            }
+            
+            segmentInfoPanel.appendChild(wrapper);
+            
+            // 额外用手持方式展示一段详细的分段列表（尤其是当段数很多时展示概要条数）
+            if (fullCount > 0) {
+                // 增加一个紧凑的文本描述，显示分段数量范围，可折叠但为了信息完善显示
+                const extraNote = document.createElement('div');
+                extraNote.style.width = '100%';
+                extraNote.style.textAlign = 'center';
+                extraNote.style.fontSize = '0.7rem';
+                extraNote.style.marginTop = '8px';
+                extraNote.style.color = '#527a9b';
+                if (fullCount <= 12) {
+                    extraNote.innerText = `📐 条状物已分为 ${fullCount} 个完整蓝色段 + ${remainder > 0 ? '余数段' : '无余数段'}。`;
+                } else {
+                    extraNote.innerText = `📐 共 ${fullCount} 个完整蓝色段 (密集分段依然精确显示每个比例) + ${remainder > 0 ? '橙色余数段' : ''}`;
+                }
+                segmentInfoPanel.appendChild(extraNote);
+            } else if (remainder > 0 && total > 0) {
+                const singleNote = document.createElement('div');
+                singleNote.style.width = '100%';
+                singleNote.style.textAlign = 'center';
+                singleNote.style.fontSize = '0.7rem';
+                singleNote.style.marginTop = '6px';
+                singleNote.innerText = `🔸 当前无完整段，总容量全部作为余数段展示。`;
+                segmentInfoPanel.appendChild(singleNote);
+            }
+        }
+
+        // 主更新逻辑: 获取值并调用渲染
+        function updateVisualization() {
+            let total = parsePositiveInt(totalInput.value, 0);
+            let unit = parsePositiveInt(segmentInput.value, 1);
+            
+            // 额外业务规则: 单段不可为0，底层为正整数, 如果用户写了0或者负数, unit修正为1并友好提示？但是用户在输入框可能提交0，做个合理限制
+            if (unit <= 0) {
+                // 重置unit为1，提醒
+                unit = 1;
+                segmentInput.value = 1;
+                // 轻提示类但不弹窗，在detailnote说明
+                detailNoteDiv.innerHTML = `⚠️ 单段大小必须 ≥ 1，已自动调整为 1。`;
+            } else {
+                // 确保输入大于0，保持原值
+                if (segmentInput.value <= 0) segmentInput.value = unit;
+            }
+            
+            // 同样总容量为负数时修正为0
+            if (total < 0) {
+                total = 0;
+                totalInput.value = 0;
+            }
+            
+            // 如果总容量为0且单段>0，展示特殊视觉
+            renderSegments(total, unit);
+        }
+        
+        // 绑定事件 & 初始化示例（6000/850 演示）
+        function init() {
+            updateBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                updateVisualization();
+            });
+            // 增加两个输入框的快捷支持（回车触发）
+            const inputs = [totalInput, segmentInput];
+            inputs.forEach(inp => {
+                inp.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        updateVisualization();
+                    }
+                });
+            });
+            // 初始化调用: 根据默认值(6000,850)渲染
+            // 但可能存在页面默认输入值已填充，手动调用
+            updateVisualization();
+        }
+        
+        init();
+    })();
+</script>
+</body>
+</html>
